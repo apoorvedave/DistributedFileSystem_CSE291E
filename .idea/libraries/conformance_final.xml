@@ -1,9 +1,0 @@
-<component name="libraryTable">
-  <library name="conformance-final">
-    <CLASSES>
-      <root url="jar://$PROJECT_DIR$/starter/conformance-final.zip!/" />
-    </CLASSES>
-    <JAVADOC />
-    <SOURCES />
-  </library>
-</component>
