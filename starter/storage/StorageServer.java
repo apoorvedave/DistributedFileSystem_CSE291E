@@ -6,15 +6,11 @@ import rmi.RMIException;
 import rmi.Skeleton;
 import rmi.Stub;
 
-import java.io.File;
-import java.io.FileNotFoundException;
-import java.io.IOException;
-import java.io.RandomAccessFile;
+import java.io.*;
 import java.net.InetSocketAddress;
 import java.net.UnknownHostException;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
-import java.nio.file.NoSuchFileException;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 
@@ -161,6 +157,9 @@ public class StorageServer implements Storage, Command {
         if (file == null) {
             throw new NullPointerException("Path null");
         }
+        if (!file.toFile(root).exists()) {
+            throw new FileNotFoundException();
+        }
         if (offset < 0 || length < 0 || offset + length > size(file)) {
             throw new IndexOutOfBoundsException(
                     String.format("File size: %d, offset: %d, len: %d", size(file), offset, length));
@@ -258,7 +257,7 @@ public class StorageServer implements Storage, Command {
         // else if it is a file, delete it and delete all empty ancestors
         else {
             Path parent = path.parent();
-                // delete file
+            // delete file
             try {
                 Files.delete(file.toPath());
                 while (!parent.isRoot() &&
@@ -281,15 +280,49 @@ public class StorageServer implements Storage, Command {
     @Override
     public synchronized boolean copy(Path file, Storage server)
             throws RMIException, FileNotFoundException, IOException {
-        // TODO: NPEs
-        throw new UnsupportedOperationException("not implemented");
-    }
-
-    public static void main(String[] args) throws IOException {
-        File root = new File("/Users/apoorve/Desktop/safe/bait");
-        StorageServer ss = new StorageServer(root);
-        Path p = new Path("/test.txt");
-        byte[] b = new byte[5];
-        Files.delete(p.toFile(root).toPath());
+        if (file == null || server == null) {
+            throw new NullPointerException();
+        }
+        File localFile = file.toFile(root);
+        try {
+            // get file size on remote server, (also checks if file exists there)
+            long size = server.size(file);
+            // create any parent files if not made already
+            localFile.getParentFile().mkdirs();
+            // delete local file if exists
+            if (localFile.exists()) {
+                localFile.delete();
+            }
+            // create this file and send return value
+            localFile.createNewFile();
+            OutputStream out = new FileOutputStream(localFile);
+            long offset = 0;
+            int length = 1024;
+            if (size > length) {
+                while (true) {
+                    int bytes = (int) Math.min((long) length, size - offset);
+                    byte[] buf = server.read(file, offset, bytes);
+                    if (buf.length > 0) {
+                        out.write(buf, 0, bytes);
+                        offset += length;
+                    } else {
+                        break;
+                    }
+                }
+            } else {
+                byte[] buf = server.read(file, 0, (int) size);
+                if (buf.length > 0) {
+                    out.write(buf, 0, (int) size);
+                }
+            }
+            out.close();
+            return true;
+        } catch (FileNotFoundException e) {
+            throw e;
+        } catch (IOException e) {
+            localFile.delete();
+            e.printStackTrace();
+            return false;
+        }
     }
 }

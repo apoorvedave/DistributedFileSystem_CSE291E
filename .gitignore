@@ -20,3 +20,5 @@ hs_err_pid*
 *.html
 
 .DS_Store
+
+out/

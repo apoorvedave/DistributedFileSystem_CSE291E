@@ -7,6 +7,7 @@ import storage.Command;
 import storage.Storage;
 
 import java.io.FileNotFoundException;
+import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.util.*;
 
@@ -52,6 +53,9 @@ public class NamingServer implements Service, Registration {
     // Maintains mapping of path to LockObject
     private final Map<Path, LockObject> lockMap;
 
+    // Maintains mapping of Path (of files only) and read requests
+    private final Map<Path, Integer> readCountsMap;
+
     /**
      * Creates the naming server object.
      * <p/>
@@ -65,6 +69,7 @@ public class NamingServer implements Service, Registration {
 
         fileMap = new HashMap<>();
         lockMap = new HashMap<>();
+        readCountsMap = new HashMap<>();
 
         service = new Skeleton<>(Service.class, this,
                 new InetSocketAddress(NamingStubs.SERVICE_PORT));
@@ -166,6 +171,49 @@ public class NamingServer implements Service, Registration {
             if (it.hasNext()) {
                 p = new Path(p, it.next());
             } else {
+                // Handling replication of files(not directories) here
+                if (!isDirectory(path)) {
+                    if (exclusive) {
+                        // if exclusive lock (=> write request), pick one, delete rest replicas
+                        Iterator<StorageServer> iterator = fileMap.get(path).iterator();
+                        StorageServer theChosenOne = iterator.next();
+                        while (iterator.hasNext()) {
+                            try {
+                                iterator.next().command_stub.delete(path);
+                                iterator.remove();
+                            } catch (RMIException ignored) {
+                            }
+                        }
+                    } else {
+                        // => read request. make copy if count = 20, reset count
+                        if (!readCountsMap.containsKey(path)) {
+                            readCountsMap.put(path, 0);
+                        }
+                        readCountsMap.put(path, readCountsMap.get(path) + 1);
+
+                        // if count >= 20, reset counter, find a new stub if possible, and copy
+                        if (readCountsMap.get(path) >= 20) {
+                            readCountsMap.put(path, 0);
+                            Iterator<StorageServer> commandIterator = storageServers.iterator();
+                            StorageServer theChosenOne = null;
+                            while (commandIterator.hasNext()) {
+                                theChosenOne = commandIterator.next();
+                                if (!fileMap.get(path).contains(theChosenOne)) {
+                                    break;
+                                }
+                            }
+                            if (theChosenOne != null) {
+                                try {
+                                    theChosenOne.command_stub.copy(path,
+                                            fileMap.get(path).iterator().next().storage_stub);
+                                    fileMap.get(path).add(theChosenOne);
+                                } catch (RMIException | IOException ignored) {
+                                }
+                            }
+                        }
+                    }
+                }
+                // Replication handling done
                 break;
             }
         }
@@ -274,20 +322,24 @@ public class NamingServer implements Service, Registration {
             return false;
         }
 
-        // get heirarchy. delete files and directories simply. send delete
-        // requests to storage stubs for files. they have to take care of
-        // deleting the files and empty directories.
+        if (!fileMap.containsKey(path) && !directorySet.contains(path)) {
+            throw new FileNotFoundException();
+        }
+
+        // get all files, get Set of relevant stubs and issue directory delete on each
+        Set<StorageServer> servers = new HashSet<>();
 
         // delete all entries in the hierarchy
         for (Path p : getHierarchy(path)) {
             if (!isDirectory(p)) {
-                for (StorageServer ss : fileMap.get(p)) {
-                    ss.command_stub.delete(p);
-                }
+                servers.addAll(fileMap.get(p));
                 fileMap.remove(p);
             } else {
                 directorySet.remove(p);
             }
+        }
+        for (StorageServer server : servers) {
+            server.command_stub.delete(path);
         }
         return true;
     }
